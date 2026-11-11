@@ -1,14 +1,16 @@
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, status
+from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from app.core.constants import HOP_BY_HOP_HEADERS
 
-router = APIRouter(tags=["proxy"])
+router = APIRouter(tags=["Proxy"])
+
 
 @router.api_route(
-    "/proxy{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    "/proxy/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
 )
 async def proxy_endpoint(path: str, request: Request):
     client: httpx.AsyncClient = request.app.state.http_client
@@ -28,7 +30,24 @@ async def proxy_endpoint(path: str, request: Request):
         content=request.stream(),
     )
 
-    upstream_response = await client.send(upstream_req, stream=True)
+    try:
+        upstream_response = await client.send(upstream_req, stream=True)
+    except httpx.TimeoutException:
+        return JSONResponse(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            content={
+                "error": "Gateway Timeout",
+                "message": "The upstream service took too long to respond.",
+            },
+        )
+    except httpx.NetworkError:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "error": "Bad Gateway",
+                "message": "Failed to connect to the upstream service.",
+            },
+        )
 
     client_headers = {
         key: value
