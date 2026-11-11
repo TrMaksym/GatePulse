@@ -4,19 +4,6 @@ from fastapi import FastAPI, Request
 from starlette.responses import StreamingResponse
 from scalar_fastapi import get_scalar_api_reference
 
-HOP_BY_HOP_HEADERS = {
-    "host",
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailers",
-    "transfer-encoding",
-    "upgrade",
-    "content-length",
-}
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     limits = httpx.Limits(max_keepalive_connections=50, max_connections=200)
