@@ -11,7 +11,8 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi (>=0.162.4,<0.163.0)",
     "uvicorn[standard] (>=0.54.0,<0.55.0)",
-    "scalar-fastapi (>=1.9.1,<2.0.0)"
+    "scalar-fastapi (>=1.9.1,<2.0.0)",
+    "httpx (>=0.28.1,<0.29.0)"
 ]
 
 
