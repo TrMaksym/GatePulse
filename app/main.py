@@ -2,7 +2,11 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, Request
 from starlette.responses import StreamingResponse
+from app.api.proxy import router as proxy_router
 from scalar_fastapi import get_scalar_api_reference
+
+from app.core.constants import HOP_BY_HOP_HEADERS
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -19,6 +23,8 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
 )
+
+app.include_router(proxy_router)
 
 @app.get("/health", tags=["System"])
 async def health_check():
