@@ -1,6 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 import httpx
+import redis
 from fastapi import FastAPI
 from scalar_fastapi import get_scalar_api_reference
 
@@ -19,9 +20,14 @@ async def lifespan(app: FastAPI):
         max_keepalive_connections=settings.MAX_KEEPALIVE_CONNECTIONS,
         max_connections=settings.MAX_CONNECTIONS,
     )
+    redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
     async with httpx.AsyncClient(limits=limits, timeout=settings.TIMEOUT_SECONDS) as client:
         app.state.http_client = client
-        yield
+        app.state.redis = redis_client
+        try:
+            yield
+        finally:
+            await redis_client.aclose()
 
 
 app = FastAPI(
