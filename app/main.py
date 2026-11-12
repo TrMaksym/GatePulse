@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
@@ -5,7 +6,12 @@ from scalar_fastapi import get_scalar_api_reference
 
 from app.api.proxy import router as proxy_router
 from app.core.config import settings
+from app.core.middleware import RequestTrackingMiddleware
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,6 +33,7 @@ app = FastAPI(
     redoc_url=None,
 )
 
+app.add_middleware(RequestTrackingMiddleware)
 app.include_router(proxy_router)
 
 

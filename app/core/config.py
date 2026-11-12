@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -7,8 +7,15 @@ class Settings:
     VERSION: str = "0.1.0"
 
     TIMEOUT_SECONDS: float = 30.0
-    MAX_KEEPALIVE_CONNECTION: int = 50
+    MAX_KEEPALIVE_CONNECTIONS: int = 50
     MAX_CONNECTIONS: int = 200
 
-settings = Settings()
+    ROUTES: dict[str, str] = field(
+        default_factory=lambda: {
+            "httpbin": "https://httpbin.org",
+            "dummy": "https://dummyjson.com",
+        }
+    )
 
+
+settings = Settings()
