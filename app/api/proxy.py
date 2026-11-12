@@ -1,7 +1,8 @@
 import logging
 
 import httpx
-from fastapi import APIRouter, Request, status
+from app.core.rate_limiter import rate_limiter
+from fastapi import APIRouter, Request, status, Depends
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
@@ -15,6 +16,7 @@ logger = logging.getLogger("gateway.proxy")
 @router.api_route(
     "/proxy/{service}/{path:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+    dependencies=[Depends(rate_limiter)],
 )
 async def proxy_endpoint(service: str, path: str, request: Request):
     upstream_base_url = settings.ROUTES.get(service)
