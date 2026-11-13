@@ -2,9 +2,10 @@ import logging
 
 import httpx
 
+from app.core.cache import get_cached_response, build_cache_key, set_cached_response
 from app.core.rate_limiter import rate_limiter
 from fastapi import APIRouter, Request, status, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.responses import StreamingResponse
 
 from app.core.config import settings
@@ -33,6 +34,25 @@ async def proxy_endpoint(service: str, path: str, request: Request):
                 "message": f"Target service '{service}' is not configured on the gateway.",
             },
         )
+
+    cache_key = None
+    if request.method == "GET":
+        redis = request.app.state.redis
+        cache_key = build_cache_key(service, path, str(request.url.query))
+        cached = await get_cached_response(redis, cache_key)
+        if cached is not None:
+            headers = dict(cached["headers"])
+            headers["X-Cache"] = "HIT"
+
+            rate_limit = getattr(request.state, "rate_limit", None)
+            rate_limit_remaining = getattr(request.state, "rate_limit_remaining", None)
+            if rate_limit is not None:
+                headers["X-RateLimit-Limit"] = str(rate_limit)
+            if rate_limit_remaining is not None:
+                headers["X-RateLimit-Remaining"] = str(rate_limit_remaining)
+
+            return Response(cached["body"], status_code=200, headers=headers)
+
 
     target_url = f"{upstream_base_url.rstrip('/')}/{path.lstrip('/')}"
     client: httpx.AsyncClient = request.app.state.http_client
@@ -86,11 +106,40 @@ async def proxy_endpoint(service: str, path: str, request: Request):
 
     rate_limit = getattr(request.state, "rate_limit", None)
     rate_limit_remaining = getattr(request.state, "rate_limit_remaining", None)
+
+    if request.method == "GET":
+        body = await upstream_response.aread()
+        await upstream_response.aclose()
+
+        clean_headers = {
+            k: v for k, v in client_headers.items() if k.lower() != "content-encoding"
+        }
+
+        if upstream_response.status_code == 200 and cache_key:
+            await set_cached_response(
+                redis,
+                cache_key,
+                body,
+                clean_headers,
+                settings.cache_ttl_seconds,
+            )
+
+        clean_headers["X-Cache"] = "MISS"
+        if rate_limit is not None:
+            clean_headers["X-RateLimit-Limit"] = str(rate_limit)
+        if rate_limit_remaining is not None:
+            clean_headers["X-RateLimit-Remaining"] = str(rate_limit_remaining)
+
+        return Response(
+            content=body,
+            status_code=upstream_response.status_code,
+            headers=clean_headers,
+        )
+
     if rate_limit is not None:
         client_headers["X-RateLimit-Limit"] = str(rate_limit)
     if rate_limit_remaining is not None:
         client_headers["X-RateLimit-Remaining"] = str(rate_limit_remaining)
-
 
     async def body_stream():
         try:

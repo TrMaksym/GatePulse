@@ -30,6 +30,8 @@ class Settings:
     RATE_LIMIT_REQUESTS: int = 50
     RATE_LIMIT_INTERVAL_SECONDS: int = 60
 
+    cache_ttl_seconds: int = 60
+
     API_KEYS: dict[str, APIKeyConfig] = field(default_factory=_load_api_keys)
 
     ROUTES: dict[str, str] = field(
