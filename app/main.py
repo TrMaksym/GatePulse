@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 import httpx
-import redis
+import redis.asyncio as redis
 from fastapi import FastAPI
 from scalar_fastapi import get_scalar_api_reference
 
@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
         try:
             yield
         finally:
-            await redis_client.aclose()
+            await redis_client.close()
 
 
 app = FastAPI(
