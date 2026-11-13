@@ -1,6 +1,7 @@
 import logging
 
 import httpx
+
 from app.core.rate_limiter import rate_limiter
 from fastapi import APIRouter, Request, status, Depends
 from fastapi.responses import JSONResponse
@@ -8,15 +9,18 @@ from starlette.responses import StreamingResponse
 
 from app.core.config import settings
 from app.core.constants import HOP_BY_HOP_HEADERS
+from app.core.security import verify_api_key
 
 router = APIRouter(tags=["Proxy"])
 
 logger = logging.getLogger("gateway.proxy")
 
+STRIPPED_HEADERS = HOP_BY_HOP_HEADERS | {"x-api-key", "host",}
+
 @router.api_route(
     "/proxy/{service}/{path:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
-    dependencies=[Depends(rate_limiter)],
+    dependencies=[Depends(verify_api_key), Depends(rate_limiter)],
 )
 async def proxy_endpoint(service: str, path: str, request: Request):
     upstream_base_url = settings.ROUTES.get(service)
@@ -38,7 +42,7 @@ async def proxy_endpoint(service: str, path: str, request: Request):
     forward_headers = {
         key: value
         for key, value in request.headers.items()
-        if key.lower() not in HOP_BY_HOP_HEADERS
+        if key.lower() not in STRIPPED_HEADERS
     }
 
     forward_headers["X-Request-ID"] = request_id
@@ -77,8 +81,16 @@ async def proxy_endpoint(service: str, path: str, request: Request):
     client_headers = {
         key: value
         for key, value in upstream_response.headers.items()
-        if key.lower() not in HOP_BY_HOP_HEADERS
+        if key.lower() not in HOP_BY_HOP_HEADERS and not key.lower().startswith("x-ratelimit-")
     }
+
+    rate_limit = getattr(request.state, "rate_limit", None)
+    rate_limit_remaining = getattr(request.state, "rate_limit_remaining", None)
+    if rate_limit is not None:
+        client_headers["X-RateLimit-Limit"] = str(rate_limit)
+    if rate_limit_remaining is not None:
+        client_headers["X-RateLimit-Remaining"] = str(rate_limit_remaining)
+
 
     async def body_stream():
         try:

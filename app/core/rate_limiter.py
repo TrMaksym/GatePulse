@@ -5,7 +5,7 @@ import uuid
 import redis.asyncio as redis
 from fastapi import HTTPException, Request, status
 
-from app.core.config import settings
+from app.core.config import settings, APIKeyConfig
 
 logger = logging.getLogger("gateway.ratelimit")
 
@@ -17,10 +17,17 @@ class RedisRateLimiter:
 
     async def __call__(self, request: Request) -> None:
         redis_client: redis.Redis = request.app.state.redis
-        client_ip = request.client.host if request.client else "unknown"
         request_id = getattr(request.state, "request_id", "unknown")
+        api_key_info = getattr(request.state, "api_key_info", None)
 
-        key = f"rate_limit:{client_ip}"
+        if api_key_info:
+            key = f"rate_limit:{api_key_info.client_id}:{api_key_info.tier}"
+            max_requests = api_key_info.rate_limit
+        else:
+            client_ip = request.client.host if request.client else "unknown"
+            key = f"rate_limit:{client_ip}"
+            max_requests = self.max_requests
+
         now = time.time()
         window_start = now - self.window_seconds
 
@@ -33,7 +40,7 @@ class RedisRateLimiter:
 
         current_requests = results[1]
 
-        if current_requests >= self.max_requests:
+        if current_requests >= max_requests:
             await redis_client.zremrangebyscore(key, now, now)
 
             oldest = await redis_client.zrange(key, 0, 0, withscores=True)
@@ -44,8 +51,8 @@ class RedisRateLimiter:
             )
 
             logger.warning(
-                f"[{request_id}] Rate limit exceeded for IP {client_ip} "
-                f"({current_requests}/{self.max_requests} requests in the last {self.window_seconds} seconds)."
+                f"[{request_id}] Rate limit exceeded for {key} "
+                f"({current_requests}/{max_requests} requests in the last {self.window_seconds} seconds)."
             )
 
             raise HTTPException(
@@ -57,6 +64,8 @@ class RedisRateLimiter:
                 headers={"Retry-After": str(retry_after)},
             )
 
+        request.state.rate_limit = max_requests
+        request.state.rate_limit_remaining = max(max_requests - current_requests - 1, 0)
 
 rate_limiter = RedisRateLimiter(
     max_requests=settings.RATE_LIMIT_REQUESTS,
