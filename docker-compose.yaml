@@ -6,3 +6,16 @@ services:
       - "6379:6379"
     command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
     restart: unless-stopped
+
+  gateway:
+    build: .
+    container_name: gatepulse_api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./app:/app/app
+    depends_on:
+      - redis
+    restart: unless-stopped

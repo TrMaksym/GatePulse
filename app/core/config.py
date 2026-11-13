@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 
 
@@ -10,7 +11,7 @@ class Settings:
     MAX_KEEPALIVE_CONNECTIONS: int = 50
     MAX_CONNECTIONS: int = 200
 
-    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_URL: str = os.getenv("REDIS_URL")
     RATE_LIMIT_REQUESTS: int = 50
     RATE_LIMIT_INTERVAL_SECONDS: int = 60
 
