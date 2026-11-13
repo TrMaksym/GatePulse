@@ -32,6 +32,9 @@ class Settings:
 
     cache_ttl_seconds: int = 60
 
+    cb_failure_threshold: int = 5
+    cb_recovery_timeout: int = 30
+
     API_KEYS: dict[str, APIKeyConfig] = field(default_factory=_load_api_keys)
 
     ROUTES: dict[str, str] = field(

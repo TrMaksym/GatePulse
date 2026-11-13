@@ -3,6 +3,7 @@ import logging
 import httpx
 
 from app.core.cache import get_cached_response, build_cache_key, set_cached_response
+from app.core.circuit_breaker import can_execute, record_failure, record_success
 from app.core.rate_limiter import rate_limiter
 from fastapi import APIRouter, Request, status, Depends
 from fastapi.responses import JSONResponse, Response
@@ -36,8 +37,8 @@ async def proxy_endpoint(service: str, path: str, request: Request):
         )
 
     cache_key = None
+    redis = request.app.state.redis
     if request.method == "GET":
-        redis = request.app.state.redis
         cache_key = build_cache_key(service, path, str(request.url.query))
         cached = await get_cached_response(redis, cache_key)
         if cached is not None:
@@ -53,7 +54,14 @@ async def proxy_endpoint(service: str, path: str, request: Request):
 
             return Response(cached["body"], status_code=200, headers=headers)
 
-
+    if not await can_execute(redis, service):
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": "Service Unavailable",
+                "message": f"The target service '{service}' is currently unavailable.",
+            },
+        )
     target_url = f"{upstream_base_url.rstrip('/')}/{path.lstrip('/')}"
     client: httpx.AsyncClient = request.app.state.http_client
 
@@ -80,6 +88,7 @@ async def proxy_endpoint(service: str, path: str, request: Request):
     try:
         upstream_response = await client.send(upstream_req, stream=True)
     except httpx.TimeoutException:
+        await record_failure(redis, service)
         return JSONResponse(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             content={
@@ -88,6 +97,7 @@ async def proxy_endpoint(service: str, path: str, request: Request):
             },
         )
     except httpx.NetworkError:
+        await record_failure(redis, service)
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content={
@@ -97,6 +107,12 @@ async def proxy_endpoint(service: str, path: str, request: Request):
         )
 
     logger.info(f"[{request_id}] <- {upstream_response.status_code}")
+
+    if upstream_response.status_code >= 500:
+        await record_failure(redis, service)
+
+    else:
+        await record_success(redis, service)
 
     client_headers = {
         key: value
