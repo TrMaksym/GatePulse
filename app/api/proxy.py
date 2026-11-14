@@ -2,9 +2,9 @@ import logging
 
 import httpx
 
-from app.core.cache import get_cached_response, build_cache_key, set_cached_response
-from app.core.circuit_breaker import can_execute, record_failure, record_success
-from app.core.rate_limiter import rate_limiter
+from app.policies.cache import get_cached_response, build_cache_key, set_cached_response
+from app.policies.circuit_breaker import can_execute, record_failure, record_success
+from app.policies.rate_limiter import rate_limiter
 from fastapi import APIRouter, Request, status, Depends
 from fastapi.responses import JSONResponse, Response
 from starlette.responses import StreamingResponse
