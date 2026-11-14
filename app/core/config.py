@@ -18,6 +18,12 @@ def _load_api_keys() -> dict[str, APIKeyConfig]:
     }
 
 @dataclass(frozen=True)
+class RoutePolicy:
+    upstream_url: str
+    fallback_url: str | None = None
+    cache_ttl: int = 60
+
+@dataclass(frozen=True)
 class Settings:
     PROJECT_NAME: str = "GatePulse"
     VERSION: str = "0.1.0"
@@ -37,12 +43,15 @@ class Settings:
 
     API_KEYS: dict[str, APIKeyConfig] = field(default_factory=_load_api_keys)
 
-    ROUTES: dict[str, str] = field(
+    ROUTES: dict[str, RoutePolicy] = field(
         default_factory=lambda: {
-            "httpbin": "https://httpbin.org",
-            "dummy": "https://dummyjson.com",
+            "httpbin": RoutePolicy(upstream_url="https://httpbin.org", cache_ttl=60),
+            "dummy": RoutePolicy(
+                upstream_url="https://dummyjson.com",
+                fallback_url="https://httpbin.org",
+                cache_ttl=60,
+            ),
         }
     )
-
 
 settings = Settings()
