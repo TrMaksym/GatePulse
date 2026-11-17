@@ -22,6 +22,8 @@ class RoutePolicy:
     upstream_url: str
     fallback_url: str | None = None
     cache_ttl: int = 60
+    max_retries: int = 2
+    retry_interval: float = 0.2
 
 @dataclass(frozen=True)
 class Settings:

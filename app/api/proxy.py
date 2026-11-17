@@ -12,6 +12,7 @@ from starlette.responses import StreamingResponse
 from app.core.config import settings
 from app.core.constants import HOP_BY_HOP_HEADERS
 from app.core.security import verify_api_key
+from app.policies.retry import execute_with_retry
 
 router = APIRouter(tags=["Proxy"])
 
@@ -97,12 +98,10 @@ async def proxy_endpoint(service: str, path: str, request: Request):
     forward_headers["X-Request-ID"] = request_id
 
     request_body = await request.body()
-    upstream_response = None
     used_fallback = False
-    primary_error: Exception | None = None
 
-    try:
-        upstream_response = await _send_upstream_request(
+    upstream_response, primary_error, retries_used = await execute_with_retry(
+        send_request=lambda: _send_upstream_request(
             client=client,
             method=request.method,
             base_url=route.upstream_url,
@@ -111,9 +110,12 @@ async def proxy_endpoint(service: str, path: str, request: Request):
             params=request.query_params,
             body=request_body,
             request_id=request_id,
-        )
-    except (httpx.TimeoutException, httpx.NetworkError) as e:
-        primary_error = e
+        ),
+        method=request.method,
+        max_retries=route.max_retries,
+        retry_interval=route.retry_interval,
+        request_id=request_id,
+    )
     if primary_error is not None or (upstream_response is not None and upstream_response.status_code >= 500):
         await record_failure(redis, service)
 
@@ -193,6 +195,8 @@ async def proxy_endpoint(service: str, path: str, request: Request):
         clean_headers["X-Cache"] = "MISS"
         if used_fallback:
             clean_headers["X-Fallback"] = "true"
+        if retries_used > 0:
+            clean_headers["X-Retries-Used"] = str(retries_used)
         if rate_limit is not None:
             clean_headers["X-RateLimit-Limit"] = str(rate_limit)
         if rate_limit_remaining is not None:
@@ -209,6 +213,8 @@ async def proxy_endpoint(service: str, path: str, request: Request):
         client_headers["X-RateLimit-Limit"] = str(rate_limit)
     if used_fallback:
         client_headers["X-Fallback"] = "true"
+    if retries_used > 0:
+        client_headers["X-Retries-Used"] = str(retries_used)
     if rate_limit_remaining is not None:
         client_headers["X-RateLimit-Remaining"] = str(rate_limit_remaining)
 
