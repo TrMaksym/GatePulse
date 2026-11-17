@@ -1,9 +1,11 @@
+import base64
 import logging
 
 import httpx
 
 from app.policies.cache import get_cached_response, build_cache_key, set_cached_response, invalidate_service_cache
 from app.policies.circuit_breaker import can_execute, record_failure, record_success
+from app.policies.idempotency import check_idempotency, release_idempotency, save_idempotency
 from app.policies.load_balancer import select_upstream
 from app.policies.rate_limiter import rate_limiter
 from fastapi import APIRouter, Request, status, Depends
@@ -78,7 +80,37 @@ async def proxy_endpoint(service: str, path: str, request: Request):
 
             return Response(cached["body"], status_code=200, headers=headers)
 
+    idempotency_key = request.headers.get("X-Idempotency-Key")
+    use_idempotency = bool(idempotency_key and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"})
+    if use_idempotency:
+        cached_item = await check_idempotency(redis, service, idempotency_key)
+        if cached_item == "IN_PROGRESS":
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={
+                    "detail": "Request already in progress"
+                }
+            )
+        if isinstance(cached_item, dict):
+            body = base64.b64decode(cached_item["body"])
+            headers = dict(cached_item["headers"])
+            headers["X-Idempotency-Key"] = idempotency_key
+            headers["X-Idempotency-Hit"] = "true"
+            rate_limit = getattr(request.state, "rate_limit", None)
+            rate_limit_remaining = getattr(request.state, "rate_limit_remaining", None)
+            if rate_limit is not None:
+                headers["X-RateLimit-Limit"] = str(rate_limit)
+            if rate_limit_remaining is not None:
+                headers["X-RateLimit-Remaining"] = str(rate_limit_remaining)
+            return Response(
+                content=body,
+                status_code=cached_item["status_code"],
+                headers=headers,
+            )
+
     if not await can_execute(redis, service):
+        if use_idempotency:
+            await release_idempotency(redis, service, idempotency_key)
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
@@ -145,17 +177,23 @@ async def proxy_endpoint(service: str, path: str, request: Request):
                 used_fallback = True
                 selected_upstream = route.fallback_url
             except httpx.TimeoutException:
-                    return JSONResponse(status_code=status.HTTP_504_GATEWAY_TIMEOUT, content={
-                        "error": "Gateway Timeout",
-                        "message": "The upstream service timed out while processing the request.",
-                })
+                if use_idempotency:
+                    await release_idempotency(redis, service, idempotency_key)
+                return JSONResponse(status_code=status.HTTP_504_GATEWAY_TIMEOUT, content={
+                    "error": "Gateway Timeout",
+                    "message": "The upstream service timed out while processing the request.",
+            })
 
             except httpx.NetworkError:
-                    return JSONResponse(status_code=status.HTTP_502_BAD_GATEWAY, content={
-                        "error": "Bad Gateway",
-                    })
+                if use_idempotency:
+                    await release_idempotency(redis, service, idempotency_key)
+                return JSONResponse(status_code=status.HTTP_502_BAD_GATEWAY, content={
+                    "error": "Bad Gateway",
+                })
 
         elif primary_error is not None:
+            if use_idempotency:
+                await release_idempotency(redis, service, idempotency_key)
             if isinstance(primary_error, httpx.TimeoutException):
                 return JSONResponse(status_code=status.HTTP_504_GATEWAY_TIMEOUT, content={
                     "error": "Gateway Timeout",
@@ -230,6 +268,32 @@ async def proxy_endpoint(service: str, path: str, request: Request):
     if rate_limit_remaining is not None:
         client_headers["X-RateLimit-Remaining"] = str(rate_limit_remaining)
 
+    if use_idempotency:
+        body = await upstream_response.aread()
+        await upstream_response.aclose()
+
+        clean_headers = {
+            k: v for k, v in client_headers.items() if k.lower() != "content-encoding"
+        }
+        clean_headers["X-Idempotency-Key"] = idempotency_key
+        clean_headers["X-Idempotency-Hit"] = "false"
+        if upstream_response.status_code >= 500:
+            await release_idempotency(redis, service, idempotency_key)
+        else:
+            await save_idempotency(
+                redis,
+                service,
+                idempotency_key,
+                upstream_response.status_code,
+                clean_headers,
+                body,
+            )
+
+        return Response(
+            content=body,
+            status_code=upstream_response.status_code,
+            headers=clean_headers
+        )
     async def body_stream():
         try:
             async for chunk in upstream_response.aiter_raw():
