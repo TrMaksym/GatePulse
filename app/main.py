@@ -1,11 +1,13 @@
 import logging
 from contextlib import asynccontextmanager
+
 import httpx
 import redis.asyncio as redis
 from fastapi import FastAPI
 from scalar_fastapi import get_scalar_api_reference
 
 from app.api.proxy import router as proxy_router
+from app.api.v1.admin import router as admin_router
 from app.core.config import settings
 from app.core.middleware import RequestTrackingMiddleware
 
@@ -14,16 +16,17 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
+
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(application: FastAPI):
     limits = httpx.Limits(
         max_keepalive_connections=settings.MAX_KEEPALIVE_CONNECTIONS,
         max_connections=settings.MAX_CONNECTIONS,
     )
     redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
     async with httpx.AsyncClient(limits=limits, timeout=settings.TIMEOUT_SECONDS) as client:
-        app.state.http_client = client
-        app.state.redis = redis_client
+        application.state.http_client = client
+        application.state.redis = redis_client
         try:
             yield
         finally:
@@ -39,7 +42,8 @@ app = FastAPI(
     redoc_url=None,
 )
 
-app.add_middleware(RequestTrackingMiddleware)
+app.add_middleware(RequestTrackingMiddleware)  # type: ignore[arg-type]
+app.include_router(admin_router)
 app.include_router(proxy_router)
 
 
