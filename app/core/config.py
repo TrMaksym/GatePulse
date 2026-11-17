@@ -18,8 +18,13 @@ def _load_api_keys() -> dict[str, APIKeyConfig]:
     }
 
 @dataclass(frozen=True)
+class UpstreamTarget:
+    url: str
+    weight: int = 1
+
+@dataclass(frozen=True)
 class RoutePolicy:
-    upstream_url: str
+    targets: tuple[UpstreamTarget, ...]
     fallback_url: str | None = None
     cache_ttl: int = 60
     max_retries: int = 2
@@ -47,9 +52,17 @@ class Settings:
 
     ROUTES: dict[str, RoutePolicy] = field(
         default_factory=lambda: {
-            "httpbin": RoutePolicy(upstream_url="https://httpbin.org", cache_ttl=60),
+            "httpbin": RoutePolicy(
+                targets=(
+                    UpstreamTarget(url="https://httpbin.org", weight=3),
+                    UpstreamTarget(url="https://postman-echo.com", weight=1),
+                ),
+                cache_ttl=60,
+            ),
             "dummy": RoutePolicy(
-                upstream_url="https://dummyjson.com",
+                targets=(
+                    UpstreamTarget(url="https://dummyjson.com", weight=1),
+                ),
                 fallback_url="https://httpbin.org",
                 cache_ttl=60,
             ),

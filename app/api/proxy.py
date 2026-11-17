@@ -4,6 +4,7 @@ import httpx
 
 from app.policies.cache import get_cached_response, build_cache_key, set_cached_response, invalidate_service_cache
 from app.policies.circuit_breaker import can_execute, record_failure, record_success
+from app.policies.load_balancer import select_upstream
 from app.policies.rate_limiter import rate_limiter
 from fastapi import APIRouter, Request, status, Depends
 from fastapi.responses import JSONResponse, Response
@@ -99,18 +100,24 @@ async def proxy_endpoint(service: str, path: str, request: Request):
 
     request_body = await request.body()
     used_fallback = False
+    selected_upstream: str | None = None
 
-    upstream_response, primary_error, retries_used = await execute_with_retry(
-        send_request=lambda: _send_upstream_request(
+    async def attempt_primary():
+        nonlocal selected_upstream
+        selected_upstream = await select_upstream(redis, service, route.targets)
+        return await _send_upstream_request(
             client=client,
             method=request.method,
-            base_url=route.upstream_url,
+            base_url=selected_upstream,
             path=path,
             headers=forward_headers,
             params=request.query_params,
             body=request_body,
             request_id=request_id,
-        ),
+        )
+
+    upstream_response, primary_error, retries_used = await execute_with_retry(
+        send_request=attempt_primary,
         method=request.method,
         max_retries=route.max_retries,
         retry_interval=route.retry_interval,
@@ -136,6 +143,7 @@ async def proxy_endpoint(service: str, path: str, request: Request):
                     request_id=request_id,
                 )
                 used_fallback = True
+                selected_upstream = route.fallback_url
             except httpx.TimeoutException:
                     return JSONResponse(status_code=status.HTTP_504_GATEWAY_TIMEOUT, content={
                         "error": "Gateway Timeout",
@@ -197,6 +205,8 @@ async def proxy_endpoint(service: str, path: str, request: Request):
             clean_headers["X-Fallback"] = "true"
         if retries_used > 0:
             clean_headers["X-Retries-Used"] = str(retries_used)
+        if selected_upstream:
+            clean_headers["X-Upstream-Service"] = selected_upstream
         if rate_limit is not None:
             clean_headers["X-RateLimit-Limit"] = str(rate_limit)
         if rate_limit_remaining is not None:
@@ -213,6 +223,8 @@ async def proxy_endpoint(service: str, path: str, request: Request):
         client_headers["X-RateLimit-Limit"] = str(rate_limit)
     if used_fallback:
         client_headers["X-Fallback"] = "true"
+    if selected_upstream:
+        client_headers["X-Upstream-Service"] = selected_upstream
     if retries_used > 0:
         client_headers["X-Retries-Used"] = str(retries_used)
     if rate_limit_remaining is not None:
