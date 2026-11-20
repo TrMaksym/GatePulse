@@ -2,7 +2,9 @@ import base64
 import logging
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_db
 from app.policies.cache import get_cached_response, build_cache_key, set_cached_response, invalidate_service_cache
 from app.policies.circuit_breaker import can_execute, record_failure, record_success
 from app.policies.idempotency import check_idempotency, release_idempotency, save_idempotency
@@ -12,10 +14,11 @@ from fastapi import APIRouter, Request, status, Depends
 from fastapi.responses import JSONResponse, Response
 from starlette.responses import StreamingResponse
 
-from app.core.config import settings
+from app.core.config import settings, UpstreamTarget
 from app.core.constants import HOP_BY_HOP_HEADERS
 from app.core.security import verify_api_key
 from app.policies.retry import execute_with_retry
+from app.repositories.gateway import get_service_by_name
 
 router = APIRouter(tags=["Proxy"])
 
@@ -50,10 +53,10 @@ async def _send_upstream_request(
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
     dependencies=[Depends(verify_api_key), Depends(rate_limiter)],
 )
-async def proxy_endpoint(service: str, path: str, request: Request):
-    route = settings.ROUTES.get(service)
+async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSession = Depends(get_db)):
+    route = await get_service_by_name(db, service)
 
-    if not route:
+    if not route or not route.is_active:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={
@@ -134,9 +137,25 @@ async def proxy_endpoint(service: str, path: str, request: Request):
     used_fallback = False
     selected_upstream: str | None = None
 
+    active_upstreams = tuple(
+        UpstreamTarget(url=u.url, weight=u.weight)
+        for u in route.upstreams
+        if u.is_active
+    )
+    if not active_upstreams:
+        if use_idempotency:
+            await release_idempotency(redis, service, idempotency_key)
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": "Service Unavailable",
+                "message": f"No active upstream services found for '{service}'.",
+            },
+        )
+
     async def attempt_primary():
         nonlocal selected_upstream
-        selected_upstream = await select_upstream(redis, service, route.targets)
+        selected_upstream = await select_upstream(redis, service, active_upstreams)
         return await _send_upstream_request(
             client=client,
             method=request.method,
