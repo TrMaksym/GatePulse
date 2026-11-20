@@ -48,6 +48,7 @@ class Settings:
     POSTGRES_HOST: str = os.getenv("POSTGRES_HOST", "postgres")
     POSTGRES_PORT: int = int(os.getenv("POSTGRES_PORT", "5432"))
     POSTGRES_DB: str = os.getenv("POSTGRES_DB", "")
+    ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
 
     RATE_LIMIT_REQUESTS: int = 50
     RATE_LIMIT_INTERVAL_SECONDS: int = 60

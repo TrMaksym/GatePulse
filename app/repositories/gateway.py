@@ -34,7 +34,7 @@ async def get_all_services(db: AsyncSession) -> list[ServiceRoute]:
 
 async def create_service_route(db: AsyncSession, payload: ServiceRouteCreate) -> ServiceRoute:
     service = ServiceRoute(
-        **payload.model_dump(exclude={"upstreams"}),
+        **payload.model_dump(exclude={"upstreams", "path_prefix"}),
         upstreams=[
             Upstream(
                 url=str(upstream.url),
@@ -69,3 +69,4 @@ async def get_active_api_key(db: AsyncSession, raw_key: str) -> APIKey | None:
     stmt = select(APIKey).where(APIKey.key == hashed_key, APIKey.is_active == True)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
+

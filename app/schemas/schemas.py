@@ -37,6 +37,7 @@ class ServiceRouteResponse(ServiceRouteBase):
     id: int
     upstreams: list[UpstreamResponse] = []
     created_at: datetime | None = None
+    path_prefix: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
