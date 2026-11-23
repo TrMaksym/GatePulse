@@ -6,12 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.gateway import ServiceRoute, Upstream, APIKey
-from app.schemas.schemas import ServiceRouteCreate, ApiKeyCreate
+from app.schemas.schemas import ServiceRouteCreate, ApiKeyCreate, ServiceRouteUpdate
 
 
 def _hash_api_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode()).hexdigest()
-
 
 
 async def get_service_by_name(db: AsyncSession, name: str) -> ServiceRoute | None:
@@ -22,6 +21,21 @@ async def get_service_by_name(db: AsyncSession, name: str) -> ServiceRoute | Non
     )
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
+
+async def get_service_by_id(db: AsyncSession, service_id: int) -> ServiceRoute | None:
+    stmt = (
+        select(ServiceRoute)
+        .options(selectinload(ServiceRoute.upstreams))
+        .where(ServiceRoute.id == service_id)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+async def update_service_route(db: AsyncSession, service: ServiceRoute, payload: ServiceRouteUpdate):
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(service, key, value)
+    await db.commit()
+    return await get_service_by_id(db, service.id)
 
 async def get_all_services(db: AsyncSession) -> list[ServiceRoute]:
     stmt = (

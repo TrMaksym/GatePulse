@@ -4,6 +4,17 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 
+def _validate_ip_networks(networks: list[str] | None) -> list[str] | None:
+    if networks is None:
+        return None
+    for net in networks:
+        try:
+            ipaddress.ip_network(net, strict=False)
+        except ValueError:
+            raise ValueError(f"Invalid IP address or CIDR network: '{net}'")
+    return networks
+
+
 class UpstreamBase(BaseModel):
     url: HttpUrl
     weight: int = Field(default=1, ge=1, le=100)
@@ -31,19 +42,51 @@ class ServiceRouteBase(BaseModel):
     ip_whitelist: list[str] = Field(default_factory=list)
     ip_blacklist: list[str] = Field(default_factory=list)
 
-    @classmethod
     @field_validator("ip_whitelist", "ip_blacklist")
+    @classmethod
     def validated_ip_networks(cls, v: list[str]) -> list[str]:
-        for i in v:
-            try:
-                ipaddress.ip_network(i, strict=False)
-            except ValueError:
-                raise ValueError(f"Invalid IP network: {i}")
-        return v
+        return _validate_ip_networks(v) or []
 
 
 class ServiceRouteCreate(ServiceRouteBase):
     upstreams: list[UpstreamCreate] = Field(..., min_length=1)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "users-service",
+                "path_prefix": "/users",
+                "cache_ttl": 60,
+                "max_retries": 2,
+                "retry_interval": 0.2,
+                "is_active": True,
+                "ip_whitelist": [],
+                "ip_blacklist": ["203.0.113.42", "198.51.100.0/24"],
+                "upstreams": [
+                    {
+                        "url": "https://httpbin.org",
+                        "weight": 1,
+                        "is_active": True,
+                    }
+                ],
+            }
+        }
+    )
+
+
+class ServiceRouteUpdate(BaseModel):
+    path_prefix: str | None = Field(default=None, min_length=1, max_length=120)
+    cache_ttl: int | None = Field(default=None, ge=0)
+    max_retries: int | None = Field(default=None, ge=0, le=10)
+    retry_interval: float | None = Field(default=None, ge=0.0, le=10.0)
+    is_active: bool | None = None
+    ip_whitelist: list[str] | None = None
+    ip_blacklist: list[str] | None = None
+
+    @field_validator("ip_whitelist", "ip_blacklist")
+    @classmethod
+    def validated_ip_networks(cls, v: list[str] | None) -> list[str] | None:
+        return _validate_ip_networks(v)
 
 
 class ServiceRouteResponse(ServiceRouteBase):
@@ -59,6 +102,16 @@ class ApiKeyCreate(BaseModel):
     client_id: str = Field(..., min_length=2, max_length=64)
     tier: str = Field(default="free", max_length=32)
     rate_limit: int = Field(default=50, ge=1)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "client_id": "mobile-app-prod",
+                "tier": "pro",
+                "rate_limit": 100,
+            }
+        }
+    )
 
 
 class ApiKeyResponse(BaseModel):

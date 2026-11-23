@@ -7,8 +7,8 @@ from app.core.database import get_db
 from app.models.gateway import APIKey
 from app.repositories.gateway import get_active_api_key
 
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-admin_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
+api_key_header = APIKeyHeader(name="X-API-Key", scheme_name="ClientApiKey", auto_error=False)
+admin_key_header = APIKeyHeader(name="X-Admin-Key", scheme_name="AdminApiKey", auto_error=False)
 
 
 async def verify_api_key(

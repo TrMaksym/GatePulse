@@ -3,8 +3,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import verify_admin_key
-from app.repositories.gateway import get_service_by_name, create_service_route, create_api_key, get_all_services
-from app.schemas.schemas import ServiceRouteResponse, ServiceRouteCreate, ApiKeyCreatedResponse, ApiKeyCreate
+from app.repositories.gateway import get_service_by_name, create_service_route, create_api_key, get_all_services, \
+    get_service_by_id, update_service_route
+from app.schemas.schemas import ServiceRouteResponse, ServiceRouteCreate, ApiKeyCreatedResponse, ApiKeyCreate, \
+    ServiceRouteUpdate
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(verify_admin_key)])
 
@@ -44,3 +46,11 @@ async def generate_api_key(
 @router.get("/services", response_model=list[ServiceRouteResponse])
 async def all_services(db: AsyncSession = Depends(get_db)):
     return await get_all_services(db)
+
+
+@router.patch("/services/{service_id}", response_model=ServiceRouteResponse)
+async def service_by_patch(service_id: int, payload: ServiceRouteUpdate, db: AsyncSession = Depends(get_db)):
+    service = await get_service_by_id(db, service_id)
+    if not service:
+        raise HTTPException(status_code=404, detail="Service not found")
+    return await update_service_route(db, service, payload)
