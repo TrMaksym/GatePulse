@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -25,7 +25,8 @@ class ServiceRoute(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
-
+    ip_whitelist: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    ip_blacklist: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
 
 class APIKey(Base):
     __tablename__ = "api_keys"

@@ -1,6 +1,7 @@
+import ipaddress
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 
 class UpstreamBase(BaseModel):
@@ -27,6 +28,18 @@ class ServiceRouteBase(BaseModel):
     max_retries: int = Field(default=2, ge=0, le=10)
     retry_interval: float = Field(default=0.2, ge=0.0, le=10.0)
     is_active: bool = True
+    ip_whitelist: list[str] = Field(default_factory=list)
+    ip_blacklist: list[str] = Field(default_factory=list)
+
+    @classmethod
+    @field_validator("ip_whitelist", "ip_blacklist")
+    def validated_ip_networks(cls, v: list[str]) -> list[str]:
+        for i in v:
+            try:
+                ipaddress.ip_network(i, strict=False)
+            except ValueError:
+                raise ValueError(f"Invalid IP network: {i}")
+        return v
 
 
 class ServiceRouteCreate(ServiceRouteBase):

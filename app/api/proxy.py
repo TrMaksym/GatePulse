@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.policies.cache import get_cached_response, build_cache_key, set_cached_response, invalidate_service_cache
 from app.policies.circuit_breaker import can_execute, record_failure, record_success
 from app.policies.idempotency import check_idempotency, release_idempotency, save_idempotency
+from app.policies.ip_filter import enforce_ip_policy
 from app.policies.load_balancer import select_upstream
 from app.policies.rate_limiter import rate_limiter
 from fastapi import APIRouter, Request, status, Depends
@@ -65,6 +66,7 @@ async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSes
             },
         )
 
+    enforce_ip_policy(request, route.ip_whitelist or [], route.ip_blacklist or [])
     cache_key = None
     redis = request.app.state.redis
     if request.method == "GET":
