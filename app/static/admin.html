@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>API Gateway — Admin Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
+  <div class="max-w-6xl mx-auto px-4 py-8 space-y-8">
+
+    <header class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-slate-800 pb-6">
+      <div>
+        <h1 class="text-2xl font-bold tracking-tight text-white">API Gateway Control Panel</h1>
+        <p class="text-sm text-slate-400">Manage service routes, IP access control, and API keys</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <input
+          id="adminKeyInput"
+          type="password"
+          placeholder="Enter X-Admin-Key..."
+          class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm w-64 focus:outline-none focus:border-indigo-500"
+        />
+        <button
+          onclick="saveAdminKey()"
+          class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition"
+        >
+          Connect
+        </button>
+      </div>
+    </header>
+
+    <div id="toast" class="hidden rounded-lg px-4 py-3 text-sm font-medium"></div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+      <section class="bg-slate-900/70 border border-slate-800 rounded-xl p-6 space-y-4">
+        <h2 class="text-lg font-semibold text-white">New Service (Route)</h2>
+        <form id="createServiceForm" onsubmit="createService(event)" class="space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-slate-400 mb-1">Service Name *</label>
+              <input name="name" required placeholder="users-api"
+                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs text-slate-400 mb-1">Upstream URL *</label>
+              <input name="upstream_url" required placeholder="https://httpbin.org/"
+                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-3 gap-3">
+            <div>
+              <label class="block text-xs text-slate-400 mb-1">Cache TTL (sec)</label>
+              <input name="cache_ttl" type="number" value="60" min="0"
+                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs text-slate-400 mb-1">Max Retries</label>
+              <input name="max_retries" type="number" value="2" min="0" max="10"
+                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs text-slate-400 mb-1">Retry Interval (s)</label>
+              <input name="retry_interval" type="number" step="0.1" value="0.2" min="0"
+                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-slate-400 mb-1">IP Whitelist (comma-separated)</label>
+              <input name="ip_whitelist" placeholder="127.0.0.1, 10.0.0.0/8"
+                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs text-slate-400 mb-1">IP Blacklist (comma-separated)</label>
+              <input name="ip_blacklist" placeholder="192.168.1.50"
+                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+            </div>
+          </div>
+
+          <button type="submit"
+            class="w-full bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium py-2 rounded-lg transition">
+            Create Service
+          </button>
+        </form>
+      </section>
+
+      <section class="bg-slate-900/70 border border-slate-800 rounded-xl p-6 space-y-4">
+        <h2 class="text-lg font-semibold text-white">Issue Client API Key</h2>
+        <form id="createKeyForm" onsubmit="createApiKey(event)" class="space-y-3">
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Owner / Client Name *</label>
+            <input name="owner" required placeholder="mobile-app-prod"
+              class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Rate Limit (requests / min)</label>
+            <input name="rate_limit" type="number" value="60" min="1"
+              class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <button type="submit"
+            class="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium py-2 rounded-lg transition">
+            Generate Key
+          </button>
+        </form>
+
+        <div id="generatedKeyBox" class="hidden bg-slate-950 border border-amber-500/40 rounded-lg p-3 space-y-1">
+          <div class="text-xs text-amber-400 font-medium">Copy this key now — it won't be shown again:</div>
+          <div class="flex items-center justify-between gap-2">
+            <code id="generatedKeyValue" class="text-xs text-emerald-400 break-all"></code>
+            <button onclick="copyKey()" class="text-xs bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded">
+              Copy
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <section class="bg-slate-900/70 border border-slate-800 rounded-xl p-6 space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-semibold text-white">Configured Services</h2>
+        <button onclick="loadServices()" class="text-xs bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg">
+          Refresh
+        </button>
+      </div>
+      <div id="servicesList" class="space-y-4">
+        <p class="text-sm text-slate-400">Enter X-Admin-Key above to load services.</p>
+      </div>
+    </section>
+
+  </div>
+
+  <script>
+    const getAdminKey = () => localStorage.getItem("gw_admin_key") || "";
+
+    function showToast(message, isError = false) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.className = `rounded-lg px-4 py-3 text-sm font-medium ${
+        isError
+          ? "bg-rose-950/80 border border-rose-700 text-rose-200"
+          : "bg-emerald-950/80 border border-emerald-700 text-emerald-200"
+      }`;
+      setTimeout(() => toast.classList.add("hidden"), 4500);
+    }
+
+    async function apiFetch(url, options = {}) {
+      const res = await fetch(url, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Admin-Key": getAdminKey(),
+          ...(options.headers || {}),
+        },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = Array.isArray(data.detail)
+          ? data.detail.map(e => `${e.loc.slice(-1)}: ${e.msg}`).join("; ")
+          : (data.detail || `HTTP ${res.status}`);
+        throw new Error(msg);
+      }
+      return data;
+    }
+
+    function parseIpList(raw) {
+      return raw.split(",").map(s => s.trim()).filter(Boolean);
+    }
+
+    function saveAdminKey() {
+      const val = document.getElementById("adminKeyInput").value.trim();
+      localStorage.setItem("gw_admin_key", val);
+      loadServices();
+    }
+
+    async function loadServices() {
+      if (!getAdminKey()) return;
+      const container = document.getElementById("servicesList");
+      try {
+        const services = await apiFetch("/admin/services");
+        if (!services.length) {
+          container.innerHTML = `<p class="text-sm text-slate-400">No services configured yet.</p>`;
+          return;
+        }
+        container.innerHTML = services.map(s => `
+          <div class="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-3">
+                <span class="font-semibold text-white">/proxy/${s.name}</span>
+                <span class="text-xs px-2 py-0.5 rounded-full ${s.is_active ? "bg-emerald-950 text-emerald-400 border border-emerald-800" : "bg-slate-800 text-slate-400"}">
+                  ${s.is_active ? "Active" : "Disabled"}
+                </span>
+                <span class="text-xs text-slate-500">TTL: ${s.cache_ttl}s | Retries: ${s.max_retries}</span>
+              </div>
+              <button onclick="toggleService(${s.id}, ${!s.is_active})"
+                class="text-xs px-3 py-1 rounded border border-slate-700 hover:bg-slate-800 transition">
+                ${s.is_active ? "Disable" : "Enable"}
+              </button>
+            </div>
+
+            <div class="text-xs text-slate-400">
+              Upstreams: ${(s.upstreams || []).map(u => `<code class="text-slate-300">${u.url}</code>`).join(", ") || "—"}
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+              <div>
+                <label class="block text-[11px] text-slate-500 mb-1">IP Whitelist (comma-separated)</label>
+                <input id="wl-${s.id}" value="${(s.ip_whitelist || []).join(", ")}"
+                  class="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs" />
+              </div>
+              <div>
+                <label class="block text-[11px] text-slate-500 mb-1">IP Blacklist (comma-separated)</label>
+                <input id="bl-${s.id}" value="${(s.ip_blacklist || []).join(", ")}"
+                  class="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs" />
+              </div>
+            </div>
+
+            <div class="flex justify-end">
+              <button onclick="updateIpLists(${s.id})"
+                class="text-xs bg-indigo-600/80 hover:bg-indigo-600 text-white px-3 py-1.5 rounded transition">
+                Save IP Rules
+              </button>
+            </div>
+          </div>
+        `).join("");
+      } catch (err) {
+        container.innerHTML = `<p class="text-sm text-rose-400">Error: ${err.message}</p>`;
+      }
+    }
+
+    async function createService(e) {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const payload = {
+        name: fd.get("name").trim(),
+        cache_ttl: Number(fd.get("cache_ttl")),
+        max_retries: Number(fd.get("max_retries")),
+        retry_interval: Number(fd.get("retry_interval")),
+        ip_whitelist: parseIpList(fd.get("ip_whitelist")),
+        ip_blacklist: parseIpList(fd.get("ip_blacklist")),
+        upstreams: [{ url: fd.get("upstream_url").trim(), weight: 1 }],
+      };
+      try {
+        await apiFetch("/admin/services", { method: "POST", body: JSON.stringify(payload) });
+        e.target.reset();
+        showToast(`Service "${payload.name}" created.`);
+        loadServices();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }
+
+    async function toggleService(id, newState) {
+      try {
+        await apiFetch(`/admin/services/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ is_active: newState }),
+        });
+        showToast(`Service #${id} status updated.`);
+        loadServices();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }
+
+    async function updateIpLists(id) {
+      const wl = parseIpList(document.getElementById(`wl-${id}`).value);
+      const bl = parseIpList(document.getElementById(`bl-${id}`).value);
+      try {
+        await apiFetch(`/admin/services/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ ip_whitelist: wl, ip_blacklist: bl }),
+        });
+        showToast(`IP rules for service #${id} saved.`);
+        loadServices();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }
+
+    async function createApiKey(e) {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const payload = {
+        owner: fd.get("owner").trim(),
+        rate_limit: Number(fd.get("rate_limit")),
+      };
+      try {
+        const res = await apiFetch("/admin/keys", { method: "POST", body: JSON.stringify(payload) });
+        const raw = res.raw_key || res.api_key || JSON.stringify(res);
+        document.getElementById("generatedKeyValue").textContent = raw;
+        document.getElementById("generatedKeyBox").classList.remove("hidden");
+        e.target.reset();
+        showToast("New API key generated.");
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    }
+
+    function copyKey() {
+      const text = document.getElementById("generatedKeyValue").textContent;
+      navigator.clipboard.writeText(text);
+      showToast("Key copied to clipboard.");
+    }
+
+    const saved = getAdminKey();
+    if (saved) {
+      document.getElementById("adminKeyInput").value = saved;
+      loadServices();
+    }
+  </script>
+</body>
+</html>

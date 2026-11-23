@@ -1,6 +1,8 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
+from fastapi.responses import FileResponse
 import httpx
 import redis.asyncio as redis
 from fastapi import FastAPI
@@ -16,6 +18,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
+BASE_DIR = Path(__file__).resolve().parent
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
@@ -47,6 +50,9 @@ app.include_router(admin_router)
 app.include_router(proxy_router)
 
 
+@app.get("/dashboard", include_in_schema=False)
+async def admin_dashboard():
+    return FileResponse(BASE_DIR / "static" / "admin.html")
 
 @app.get("/health", tags=["System"])
 async def health_check():
