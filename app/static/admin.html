@@ -93,7 +93,7 @@
         <form id="createKeyForm" onsubmit="createApiKey(event)" class="space-y-3">
           <div>
             <label class="block text-xs text-slate-400 mb-1">Owner / Client Name *</label>
-            <input name="owner" required placeholder="mobile-app-prod"
+            <input name="client_id" required placeholder="mobile-app-prod"
               class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
           </div>
           <div>
@@ -285,7 +285,7 @@
       e.preventDefault();
       const fd = new FormData(e.target);
       const payload = {
-        owner: fd.get("owner").trim(),
+        owner: fd.get("client_id").trim(),
         rate_limit: Number(fd.get("rate_limit")),
       };
       try {
