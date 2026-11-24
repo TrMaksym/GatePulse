@@ -27,6 +27,13 @@ class ServiceRoute(Base):
     )
     ip_whitelist: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     ip_blacklist: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    require_jwt: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    jwt_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    path_prefix: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    strip_prefix: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    request_headers_add: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, server_default="{}")
+    request_headers_remove: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="()")
+
 
 class APIKey(Base):
     __tablename__ = "api_keys"
