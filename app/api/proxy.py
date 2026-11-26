@@ -2,42 +2,52 @@ import base64
 import logging
 
 import httpx
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.database import get_db
-from app.policies.cache import get_cached_response, build_cache_key, set_cached_response, invalidate_service_cache
-from app.policies.circuit_breaker import can_execute, record_failure, record_success
-from app.policies.idempotency import check_idempotency, release_idempotency, save_idempotency
-from app.policies.ip_filter import enforce_ip_policy
-from app.policies.load_balancer import select_upstream
-from app.policies.rate_limiter import rate_limiter
-from fastapi import APIRouter, Request, status, Depends
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import JSONResponse, Response
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
-from app.core.config import settings, UpstreamTarget
+from app.core.config import UpstreamTarget, settings
 from app.core.constants import HOP_BY_HOP_HEADERS
+from app.core.database import get_db
 from app.core.security import verify_api_key
+from app.policies.cache import (
+    build_cache_key,
+    get_cached_response,
+    invalidate_service_cache,
+    set_cached_response,
+)
+from app.policies.circuit_breaker import can_execute, record_failure, record_success
+from app.policies.idempotency import (
+    check_idempotency,
+    release_idempotency,
+    save_idempotency,
+)
+from app.policies.ip_filter import enforce_ip_policy
+from app.policies.jwt_auth import verify_service_jwt
+from app.policies.load_balancer import select_upstream
+from app.policies.rate_limiter import rate_limiter
 from app.policies.retry import execute_with_retry
+from app.policies.transformations import rewrite_path, transform_headers
 from app.repositories.gateway import get_service_by_name
 
 router = APIRouter(tags=["Proxy"])
 
 logger = logging.getLogger("gateway.proxy")
 
-STRIPPED_HEADERS = HOP_BY_HOP_HEADERS | {"x-api-key", "host",}
+STRIPPED_HEADERS = HOP_BY_HOP_HEADERS | {"x-api-key", "host"}
+
 
 async def _send_upstream_request(
-        client: httpx.AsyncClient,
-        method: str,
-        base_url: str,
-        path: str,
-        headers: dict[str, str],
-        params: dict[str, str],
-        body: bytes,
-        request_id: str,
+    client: httpx.AsyncClient,
+    method: str,
+    base_url: str,
+    path: str,
+    headers: dict[str, str],
+    params: dict[str, str],
+    body: bytes,
+    request_id: str,
 ) -> httpx.Response:
-
     target_url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
     logger.info(f"[{request_id}] -> {method} {target_url}")
     upstream_req = client.build_request(
@@ -45,16 +55,22 @@ async def _send_upstream_request(
         url=target_url,
         headers=headers,
         params=params,
-        content=body
+        content=body,
     )
     return await client.send(upstream_req, stream=True)
+
 
 @router.api_route(
     "/proxy/{service}/{path:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
     dependencies=[Depends(verify_api_key), Depends(rate_limiter)],
 )
-async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSession = Depends(get_db)):
+async def proxy_endpoint(
+    service: str,
+    path: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     route = await get_service_by_name(db, service)
 
     if not route or not route.is_active:
@@ -67,6 +83,12 @@ async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSes
         )
 
     enforce_ip_policy(request, route.ip_whitelist or [], route.ip_blacklist or [])
+    jwt_payload = verify_service_jwt(
+        request,
+        bool(route.require_jwt),
+        str(route.jwt_secret) if route.jwt_secret else None,
+    )
+
     cache_key = None
     redis = request.app.state.redis
     if request.method == "GET":
@@ -86,15 +108,15 @@ async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSes
             return Response(cached["body"], status_code=200, headers=headers)
 
     idempotency_key = request.headers.get("X-Idempotency-Key")
-    use_idempotency = bool(idempotency_key and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"})
+    use_idempotency = bool(
+        idempotency_key and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    )
     if use_idempotency:
         cached_item = await check_idempotency(redis, service, idempotency_key)
         if cached_item == "IN_PROGRESS":
             return JSONResponse(
                 status_code=status.HTTP_409_CONFLICT,
-                content={
-                    "detail": "Request already in progress"
-                }
+                content={"detail": "Request already in progress"},
             )
         if isinstance(cached_item, dict):
             body = base64.b64decode(cached_item["body"])
@@ -123,8 +145,8 @@ async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSes
                 "message": f"The target service '{service}' is currently unavailable.",
             },
         )
-    client: httpx.AsyncClient = request.app.state.http_client
 
+    client: httpx.AsyncClient = request.app.state.http_client
     request_id = getattr(request.state, "request_id", "unknown")
 
     forward_headers = {
@@ -132,7 +154,6 @@ async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSes
         for key, value in request.headers.items()
         if key.lower() not in STRIPPED_HEADERS
     }
-
     forward_headers["X-Request-ID"] = request_id
 
     request_body = await request.body()
@@ -155,6 +176,18 @@ async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSes
             },
         )
 
+    target_path = rewrite_path(
+        path,
+        str(route.strip_prefix) if route.strip_prefix else None,
+        str(route.path_prefix) if route.path_prefix else None,
+    )
+    forward_headers = transform_headers(
+        forward_headers,
+        list(route.request_headers_remove) if route.request_headers_remove else None,
+        dict(route.request_headers_add) if route.request_headers_add else None,
+        jwt_payload,
+    )
+
     async def attempt_primary():
         nonlocal selected_upstream
         selected_upstream = await select_upstream(redis, service, active_upstreams)
@@ -162,7 +195,7 @@ async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSes
             client=client,
             method=request.method,
             base_url=selected_upstream,
-            path=path,
+            path=target_path,
             headers=forward_headers,
             params=request.query_params,
             body=request_body,
@@ -176,7 +209,10 @@ async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSes
         retry_interval=route.retry_interval,
         request_id=request_id,
     )
-    if primary_error is not None or (upstream_response is not None and upstream_response.status_code >= 500):
+
+    if primary_error is not None or (
+        upstream_response is not None and upstream_response.status_code >= 500
+    ):
         await record_failure(redis, service)
 
         if route.fallback_url:
@@ -189,7 +225,7 @@ async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSes
                     client=client,
                     method=request.method,
                     base_url=route.fallback_url,
-                    path=path,
+                    path=target_path,
                     headers=forward_headers,
                     params=request.query_params,
                     body=request_body,
@@ -200,43 +236,55 @@ async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSes
             except httpx.TimeoutException:
                 if use_idempotency:
                     await release_idempotency(redis, service, idempotency_key)
-                return JSONResponse(status_code=status.HTTP_504_GATEWAY_TIMEOUT, content={
-                    "error": "Gateway Timeout",
-                    "message": "The upstream service timed out while processing the request.",
-            })
-
+                return JSONResponse(
+                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                    content={
+                        "error": "Gateway Timeout",
+                        "message": "The upstream service timed out while processing the request.",
+                    },
+                )
             except httpx.NetworkError:
                 if use_idempotency:
                     await release_idempotency(redis, service, idempotency_key)
-                return JSONResponse(status_code=status.HTTP_502_BAD_GATEWAY, content={
-                    "error": "Bad Gateway",
-                })
+                return JSONResponse(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    content={"error": "Bad Gateway"},
+                )
 
         elif primary_error is not None:
             if use_idempotency:
                 await release_idempotency(redis, service, idempotency_key)
             if isinstance(primary_error, httpx.TimeoutException):
-                return JSONResponse(status_code=status.HTTP_504_GATEWAY_TIMEOUT, content={
-                    "error": "Gateway Timeout",
-                    "message": "The upstream service timed out while processing the request.",
-                })
-            return JSONResponse(status_code=status.HTTP_502_BAD_GATEWAY, content={
-                "error": "Bad Gateway",
-                "message": "The upstream service encountered an error while processing the request.",
-            })
+                return JSONResponse(
+                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                    content={
+                        "error": "Gateway Timeout",
+                        "message": "The upstream service timed out while processing the request.",
+                    },
+                )
+            return JSONResponse(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                content={
+                    "error": "Bad Gateway",
+                    "message": "The upstream service encountered an error while processing the request.",
+                },
+            )
     else:
         await record_success(redis, service)
 
-
     logger.info(f"[{request_id}] <- {upstream_response.status_code}")
 
-    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and upstream_response.status_code < 300:
+    if (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and upstream_response.status_code < 300
+    ):
         await invalidate_service_cache(redis, service)
 
     client_headers = {
         key: value
         for key, value in upstream_response.headers.items()
-        if key.lower() not in HOP_BY_HOP_HEADERS and not key.lower().startswith("x-ratelimit-")
+        if key.lower() not in HOP_BY_HOP_HEADERS
+        and not key.lower().startswith("x-ratelimit-")
     }
 
     rate_limit = getattr(request.state, "rate_limit", None)
@@ -278,7 +326,6 @@ async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSes
         )
 
     if rate_limit is not None:
-
         client_headers["X-RateLimit-Limit"] = str(rate_limit)
     if used_fallback:
         client_headers["X-Fallback"] = "true"
@@ -313,8 +360,9 @@ async def proxy_endpoint(service: str, path: str, request: Request, db: AsyncSes
         return Response(
             content=body,
             status_code=upstream_response.status_code,
-            headers=clean_headers
+            headers=clean_headers,
         )
+
     async def body_stream():
         try:
             async for chunk in upstream_response.aiter_raw():

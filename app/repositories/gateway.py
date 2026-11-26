@@ -48,7 +48,7 @@ async def get_all_services(db: AsyncSession) -> list[ServiceRoute]:
 
 async def create_service_route(db: AsyncSession, payload: ServiceRouteCreate) -> ServiceRoute:
     service = ServiceRoute(
-        **payload.model_dump(exclude={"upstreams", "path_prefix"}),
+        **payload.model_dump(exclude={"upstreams"}),
         upstreams=[
             Upstream(
                 url=str(upstream.url),
