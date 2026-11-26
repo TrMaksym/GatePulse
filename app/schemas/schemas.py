@@ -46,6 +46,7 @@ class ServiceRouteBase(BaseModel):
     jwt_secret: str | None = Field(default=None, max_length=255)
     request_headers_add: dict[str, str] = Field(default_factory=dict)
     request_headers_remove: list[str] = Field(default_factory=list)
+    is_ai_service: bool | None = None
 
     @field_validator("ip_whitelist", "ip_blacklist")
     @classmethod
@@ -96,6 +97,8 @@ class ServiceRouteUpdate(BaseModel):
     jwt_secret: str | None = Field(default=None, max_length=255)
     request_headers_add: dict[str, str] | None = None
     request_headers_remove: list[str] | None = None
+    is_ai_service: bool | None = None
+
 
     @field_validator("ip_whitelist", "ip_blacklist")
     @classmethod
