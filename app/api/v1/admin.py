@@ -58,12 +58,14 @@ async def service_by_patch(service_id: int, payload: ServiceRouteUpdate, db: Asy
 
 @router.get("/ai-usage/{client_id}")
 async def read_client_ai_usage(
-        client_id: str,
-        request: Request,
-        service: str | None = None
+    client_id: str,
+    request: Request,
+    service: str | None = None,
 ):
     redis = request.app.state.redis
-    usage = await get_client_ai_usage(redis, client_id, service)
+    usage = await get_client_ai_usage(redis, client_id)
+    if service:
+        usage = {service: usage.get(service, {})}
     return {
         "client_id": client_id,
         "usage": usage,
