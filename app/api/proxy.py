@@ -11,6 +11,10 @@ from app.core.config import UpstreamTarget, settings
 from app.core.constants import HOP_BY_HOP_HEADERS
 from app.core.database import get_db
 from app.core.security import verify_api_key
+from app.policies.ai_profile import (
+    build_post_cache_key,
+    is_streaming_request, sse_token_meter_stream, extract_usage_from_json, record_token_usage,
+)
 from app.policies.cache import (
     build_cache_key,
     get_cached_response,
@@ -36,6 +40,22 @@ router = APIRouter(tags=["Proxy"])
 logger = logging.getLogger("gateway.proxy")
 
 STRIPPED_HEADERS = HOP_BY_HOP_HEADERS | {"x-api-key", "host"}
+
+
+def _attach_rate_limit_headers(headers: dict[str, str], request: Request) -> None:
+    rate_limit = getattr(request.state, "rate_limit", None)
+    rate_limit_remaining = getattr(request.state, "rate_limit_remaining", None)
+    if rate_limit is not None:
+        headers["X-RateLimit-Limit"] = str(rate_limit)
+    if rate_limit_remaining is not None:
+        headers["X-RateLimit-Remaining"] = str(rate_limit_remaining)
+
+
+def _build_cached_response(cached: dict, request: Request) -> Response:
+    headers = dict(cached["headers"])
+    headers["X-Cache"] = "HIT"
+    _attach_rate_limit_headers(headers, request)
+    return Response(cached["body"], status_code=200, headers=headers)
 
 
 async def _send_upstream_request(
@@ -89,23 +109,29 @@ async def proxy_endpoint(
         str(route.jwt_secret) if route.jwt_secret else None,
     )
 
+    is_ai_service = bool(route.is_ai_service)
+    api_client_id = str(getattr(request.state, "client_id", "unknown"))
+    request_body: bytes | None = None
+    is_ai_streaming = False
+
     cache_key = None
     redis = request.app.state.redis
     if request.method == "GET":
         cache_key = build_cache_key(service, path, str(request.url.query))
         cached = await get_cached_response(redis, cache_key)
         if cached is not None:
-            headers = dict(cached["headers"])
-            headers["X-Cache"] = "HIT"
+            return _build_cached_response(cached, request)
 
-            rate_limit = getattr(request.state, "rate_limit", None)
-            rate_limit_remaining = getattr(request.state, "rate_limit_remaining", None)
-            if rate_limit is not None:
-                headers["X-RateLimit-Limit"] = str(rate_limit)
-            if rate_limit_remaining is not None:
-                headers["X-RateLimit-Remaining"] = str(rate_limit_remaining)
-
-            return Response(cached["body"], status_code=200, headers=headers)
+    if is_ai_service and request.method == "POST":
+        request_body = await request.body()
+        is_ai_streaming = is_streaming_request(request_body)
+        if not is_ai_streaming:
+            cache_key = build_post_cache_key(
+                service, path, str(request.url.query), request_body
+            )
+            cached = await get_cached_response(redis, cache_key)
+            if cached is not None:
+                return _build_cached_response(cached, request)
 
     idempotency_key = request.headers.get("X-Idempotency-Key")
     use_idempotency = bool(
@@ -123,12 +149,7 @@ async def proxy_endpoint(
             headers = dict(cached_item["headers"])
             headers["X-Idempotency-Key"] = idempotency_key
             headers["X-Idempotency-Hit"] = "true"
-            rate_limit = getattr(request.state, "rate_limit", None)
-            rate_limit_remaining = getattr(request.state, "rate_limit_remaining", None)
-            if rate_limit is not None:
-                headers["X-RateLimit-Limit"] = str(rate_limit)
-            if rate_limit_remaining is not None:
-                headers["X-RateLimit-Remaining"] = str(rate_limit_remaining)
+            _attach_rate_limit_headers(headers, request)
             return Response(
                 content=body,
                 status_code=cached_item["status_code"],
@@ -156,7 +177,9 @@ async def proxy_endpoint(
     }
     forward_headers["X-Request-ID"] = request_id
 
-    request_body = await request.body()
+    if request_body is None:
+        request_body = await request.body()
+
     used_fallback = False
     selected_upstream: str | None = None
 
@@ -277,6 +300,7 @@ async def proxy_endpoint(
     if (
         request.method in {"POST", "PUT", "PATCH", "DELETE"}
         and upstream_response.status_code < 300
+        and not (is_ai_service and request.method == "POST")
     ):
         await invalidate_service_cache(redis, service)
 
@@ -286,9 +310,6 @@ async def proxy_endpoint(
         if key.lower() not in HOP_BY_HOP_HEADERS
         and not key.lower().startswith("x-ratelimit-")
     }
-
-    rate_limit = getattr(request.state, "rate_limit", None)
-    rate_limit_remaining = getattr(request.state, "rate_limit_remaining", None)
 
     if request.method == "GET":
         body = await upstream_response.aread()
@@ -314,10 +335,7 @@ async def proxy_endpoint(
             clean_headers["X-Retries-Used"] = str(retries_used)
         if selected_upstream:
             clean_headers["X-Upstream-Service"] = selected_upstream
-        if rate_limit is not None:
-            clean_headers["X-RateLimit-Limit"] = str(rate_limit)
-        if rate_limit_remaining is not None:
-            clean_headers["X-RateLimit-Remaining"] = str(rate_limit_remaining)
+        _attach_rate_limit_headers(clean_headers, request)
 
         return Response(
             content=body,
@@ -325,16 +343,13 @@ async def proxy_endpoint(
             headers=clean_headers,
         )
 
-    if rate_limit is not None:
-        client_headers["X-RateLimit-Limit"] = str(rate_limit)
+    _attach_rate_limit_headers(client_headers, request)
     if used_fallback:
         client_headers["X-Fallback"] = "true"
     if selected_upstream:
         client_headers["X-Upstream-Service"] = selected_upstream
     if retries_used > 0:
         client_headers["X-Retries-Used"] = str(retries_used)
-    if rate_limit_remaining is not None:
-        client_headers["X-RateLimit-Remaining"] = str(rate_limit_remaining)
 
     if use_idempotency:
         body = await upstream_response.aread()
@@ -362,6 +377,42 @@ async def proxy_endpoint(
             status_code=upstream_response.status_code,
             headers=clean_headers,
         )
+
+    if is_ai_service:
+        is_sse = is_ai_streaming or upstream_response.headers.get("Content-Type", "").startswith("text/event-stream")
+        if is_sse:
+            return StreamingResponse(
+                content=sse_token_meter_stream(
+                    upstream_response,
+                    redis,
+                    api_client_id,
+                    service,
+                    request_id
+                ),
+                status_code=upstream_response.status_code,
+                headers=client_headers,
+            )
+        else:
+            body = await upstream_response.aread()
+            await upstream_response.aclose()
+            usage = extract_usage_from_json(body)
+            if usage:
+                await record_token_usage(redis, api_client_id, service, usage)
+            clean_headers = {k: v for k, v in client_headers.items() if k.lower() != "content-encoding"}
+            if upstream_response.status_code == 200 and cache_key:
+                await set_cached_response(
+                    redis,
+                    cache_key,
+                    body,
+                    clean_headers,
+                    route.cache_ttl,
+                )
+            clean_headers["X-Cache"] = "MISS"
+            return Response(
+                content=body,
+                status_code=upstream_response.status_code,
+                headers=clean_headers,
+            )
 
     async def body_stream():
         try:

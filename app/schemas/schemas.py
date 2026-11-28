@@ -46,7 +46,7 @@ class ServiceRouteBase(BaseModel):
     jwt_secret: str | None = Field(default=None, max_length=255)
     request_headers_add: dict[str, str] = Field(default_factory=dict)
     request_headers_remove: list[str] = Field(default_factory=list)
-    is_ai_service: bool | None = None
+    is_ai_service: bool = False
 
     @field_validator("ip_whitelist", "ip_blacklist")
     @classmethod
@@ -67,6 +67,7 @@ class ServiceRouteCreate(ServiceRouteBase):
                 "max_retries": 2,
                 "retry_interval": 0.2,
                 "is_active": True,
+                "is_ai_service": False,
                 "ip_whitelist": [],
                 "ip_blacklist": ["203.0.113.42", "198.51.100.0/24"],
                 "require_jwt": True,
@@ -98,7 +99,6 @@ class ServiceRouteUpdate(BaseModel):
     request_headers_add: dict[str, str] | None = None
     request_headers_remove: list[str] | None = None
     is_ai_service: bool | None = None
-
 
     @field_validator("ip_whitelist", "ip_blacklist")
     @classmethod

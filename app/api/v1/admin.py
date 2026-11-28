@@ -1,8 +1,9 @@
-from fastapi import APIRouter, status, Depends, HTTPException
+from fastapi import APIRouter, status, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import verify_admin_key
+from app.policies.ai_profile import get_client_ai_usage
 from app.repositories.gateway import get_service_by_name, create_service_route, create_api_key, get_all_services, \
     get_service_by_id, update_service_route
 from app.schemas.schemas import ServiceRouteResponse, ServiceRouteCreate, ApiKeyCreatedResponse, ApiKeyCreate, \
@@ -54,3 +55,16 @@ async def service_by_patch(service_id: int, payload: ServiceRouteUpdate, db: Asy
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
     return await update_service_route(db, service, payload)
+
+@router.get("/ai-usage/{client_id}")
+async def read_client_ai_usage(
+        client_id: str,
+        request: Request,
+        service: str | None = None
+):
+    redis = request.app.state.redis
+    usage = await get_client_ai_usage(redis, client_id, service)
+    return {
+        "client_id": client_id,
+        "usage": usage,
+    }
